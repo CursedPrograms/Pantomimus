@@ -25,6 +25,25 @@ Real-time webcam motion capture for Blender and game engines. Turn human movemen
 
 Part of Atelier.
 
+---
+
+### What it does
+* **Live webcam tracking:** Captures full-body poses in real time from any standard USB or built-in camera.
+* **Clean 3D skeletons:** Filters jitter and maps joint rotations onto standard humanoid armatures.
+* **Ready for your pipeline:** Export animations directly to `.fbx`, `.bvh`, or `.glb` for Blender, **Demiurge**, Unity, or Unreal Engine—or pair with **Pygmalion** rigs.
+* **Runs locally:** Fast native C++ / OpenGL interface with no cloud accounts or subscriptions.
+
+---
+
+### Minimum requirements
+* **System:** Windows 10 or 11, 64-bit
+* **Processor:** 64-bit processor (AVX2 recommended for pose inference)
+* **Memory:** 4 GB RAM
+* **Graphics:** Any graphics card with OpenGL 3.0+
+* **Camera:** Standard webcam (720p 30fps or better recommended)
+
+---
+
 <br>
 <div align="center">
 © Cursed Entertainment 2026
