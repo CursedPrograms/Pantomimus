@@ -159,9 +159,16 @@ void Solver::solve(const Skel::Skeleton& s, const Result& r, double t, const Set
     }
 
     auto seen = [&](std::initializer_list<int> ls) { float m = 1; for (int l : ls) m = std::min(m, vis[l]); return m >= set.visibility; };
-    auto hold = [&](int b) {   // an unseen limb: as at rest (carried) or as last seen
-        if (b < 0) return;
-        if (set.unseen == UNSEEN_HOLD && havePrev_) setTree(b, M::normalize(W[s.bones[b].parent] * prev_.local[b]));
+    // an unseen limb chain (parent to child): held exactly as it was last seen, so an arm behind the body keeps its
+    // bend instead of snapping straight. UNSEEN_REST leaves it carried (the rest pose).
+    auto hold = [&](std::initializer_list<int> chain) {
+        if (set.unseen != UNSEEN_HOLD || !havePrev_) return;
+        for (int b : chain) {
+            if (b < 0) continue;
+            const int par = s.bones[b].parent;
+            if (par < 0 || (size_t)b >= prev_.local.size()) continue;
+            W[b] = M::normalize(W[par] * prev_.local[b]);
+        }
     };
 
     // the arms
@@ -177,7 +184,7 @@ void Solver::solve(const Skel::Skeleton& s, const Result& r, double t, const Set
         }
         const bool armSeen = set.arms && seen({L_SHOULDER + o, L_ELBOW + o, L_WRIST + o});
         out.limbSeen[side] = armSeen;
-        if (!armSeen) { hold(ua); continue; }
+        if (!armSeen) { hold({ua, la, hd}); continue; }
         if (ua >= 0 && la >= 0) {
             const V3 d0 = rest_[L_ELBOW + o] - rest_[L_SHOULDER + o], d = P[L_ELBOW + o] - P[L_SHOULDER + o];
             const V3 l0 = rest_[L_WRIST + o] - rest_[L_ELBOW + o], l = P[L_WRIST + o] - P[L_ELBOW + o];
@@ -201,7 +208,7 @@ void Solver::solve(const Skel::Skeleton& s, const Result& r, double t, const Set
         const int th = ro_.thigh[side], ca = ro_.calf[side], ft = ro_.foot[side];
         const bool legSeen = set.legs && seen({L_HIP + o, L_KNEE + o, L_ANKLE + o});
         out.limbSeen[2 + side] = legSeen;
-        if (!legSeen) { hold(th); continue; }
+        if (!legSeen) { hold({th, ca, ft}); continue; }
         if (th < 0 || ca < 0) continue;
         const V3 d0 = rest_[L_KNEE + o] - rest_[L_HIP + o], d = P[L_KNEE + o] - P[L_HIP + o];
         const V3 c0 = rest_[L_ANKLE + o] - rest_[L_KNEE + o], c = P[L_ANKLE + o] - P[L_KNEE + o];

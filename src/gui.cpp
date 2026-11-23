@@ -159,7 +159,7 @@ void saveSettings() {
     auto b = [](bool v) { return v ? 1 : 0; };
     f << "language=" << s.language << "\nmodelsDir=" << s.modelsDir << "\nopenLast=" << b(s.openLast) << "\ncameraAtStart=" << b(s.cameraAtStart)
       << "\nlastProject=" << s.lastProject << "\ncamera=" << s.camera << "\ncamW=" << s.camW << "\ncamH=" << s.camH << "\ncamFps=" << s.camFps
-      << "\nmirrorView=" << b(s.mirrorView) << "\noverlay=" << b(s.overlay) << "\noverlayRoi=" << b(s.overlayRoi) << "\noverlayLabels=" << b(s.overlayLabels)
+      << "\nmirrorView=" << b(s.mirrorView) << "\nloopVideo=" << b(s.loopVideo) << "\noverlay=" << b(s.overlay) << "\noverlayRoi=" << b(s.overlayRoi) << "\noverlayLabels=" << b(s.overlayLabels)
       << "\nmodel=" << s.pose.model << "\ndetectScore=" << s.pose.detectScore << "\npresence=" << s.pose.presence << "\nroiScale=" << s.pose.roiScale
       << "\nrefine=" << b(s.pose.refine) << "\nthreads=" << s.pose.threads
       << "\nfilterOn=" << b(s.filter.on) << "\nminCutoff=" << s.filter.minCutoff << "\nbeta=" << s.filter.beta << "\ndCutoff=" << s.filter.dCutoff
@@ -184,7 +184,7 @@ void saveSettings() {
       << "\ntPose=" << b(s.tPose) << "\nheight=" << s.height << "\ncountdown=" << s.countdown
       << "\nlinkPort=" << s.linkPort << "\npygHost=" << s.pygHost << "\npygPort=" << s.pygPort << "\npygRate=" << s.pygRate
       << "\nlookMannequin=" << b(s.look.mannequin) << "\nlookBones=" << b(s.look.bones) << "\nlookFloor=" << b(s.look.floor)
-      << "\nlookLandmarks=" << b(s.look.landmarks) << "\nlookFollow=" << b(s.look.follow) << "\n";
+      << "\nlookLandmarks=" << b(s.look.landmarks) << "\nlookFollow=" << b(s.look.follow) << "\nlookFace=" << b(s.look.face) << "\n";
 }
 
 static void loadSettings() {
@@ -216,14 +216,14 @@ static void loadSettings() {
             {"rootMode", &s.solver.rootMode}, {"unseen", &s.solver.unseen}, {"minPlant", &s.cleanup.minPlant}, {"exportFormat", &s.exportFormat},
             {"naming", &s.exportOpts.naming}, {"zUp", &s.exportOpts.zUp}, {"countdown", &s.countdown}, {"linkPort", &s.linkPort}, {"pygPort", &s.pygPort}};
         static const std::map<std::string, bool*> bools = {
-            {"openLast", &s.openLast}, {"cameraAtStart", &s.cameraAtStart}, {"mirrorView", &s.mirrorView}, {"overlay", &s.overlay},
+            {"openLast", &s.openLast}, {"cameraAtStart", &s.cameraAtStart}, {"mirrorView", &s.mirrorView}, {"loopVideo", &s.loopVideo}, {"overlay", &s.overlay},
             {"overlayRoi", &s.overlayRoi}, {"overlayLabels", &s.overlayLabels}, {"refine", &s.pose.refine}, {"filterOn", &s.filter.on},
             {"mirror", &s.solver.mirror}, {"groundLock", &s.solver.groundLock}, {"legs", &s.solver.legs}, {"arms", &s.solver.arms},
             {"head", &s.solver.head}, {"torso", &s.solver.torso}, {"footLock", &s.solver.footLock}, {"hands", &s.hands.on},
             {"face", &s.face.on}, {"eyesFromIris", &s.face.eyesFromIris}, {"faceFromBody", &s.face.fromBody}, {"markers", &s.markers.on}, {"markerGuide", &s.markerGuide},
             {"cleanFootLock", &s.cleanup.footLock}, {"loop", &s.cleanup.loop}, {"inPlace", &s.cleanup.inPlace}, {"startAtOrigin", &s.cleanup.startAtOrigin},
             {"mannequin", &s.exportOpts.mannequin}, {"tPose", &s.tPose}, {"lookMannequin", &s.look.mannequin}, {"lookBones", &s.look.bones},
-            {"lookFloor", &s.look.floor}, {"lookLandmarks", &s.look.landmarks}, {"lookFollow", &s.look.follow}};
+            {"lookFloor", &s.look.floor}, {"lookLandmarks", &s.look.landmarks}, {"lookFollow", &s.look.follow}, {"lookFace", &s.look.face}};
         if (auto it = floats.find(k); it != floats.end()) *it->second = x;
         else if (auto it2 = ints.find(k); it2 != ints.end()) *it2->second = i;
         else if (auto it3 = bools.find(k); it3 != bools.end()) *it3->second = bv;
@@ -250,6 +250,7 @@ bool settingsNew = true, skeletonNew = true, resetNew = false;
 bool calibrateNew = false, clearMarkersNew = false;
 Live latest;
 bool rec = false, trackingAll = false;
+bool videoDone = false, replayReq = false;   // a watched video has reached its end; a replay was asked for
 double recStart = -1, countdownUntil = 0;
 Clip::Take recTake;
 bool sourceIsOpen = false;
@@ -286,7 +287,7 @@ static void work() {
     Filter::Landmarks filt;
     Solver::Solver solver;
     Settings set; Skel::Skeleton skel;
-    std::string loadedDir; int loadedModel = -1, loadedThreads = -1;
+    std::string loadedDir, curFile; int loadedModel = -1, loadedThreads = -1;
     std::deque<double> stamps;
     double lastPlay = 0, lastT = -1;
     long long frameNo = 0;
@@ -306,8 +307,10 @@ static void work() {
             std::string err;
             if (req.kind == 1) src = Src::openCamera(req.camera, set.camW, set.camH, set.camFps, err);
             else if (req.kind == 2) src = Src::openFile(req.path, err);
+            curFile = req.kind == 2 ? req.path : std::string();
             tracker.reset(); filt.reset(); solver.reset(); faceTracker.reset(); stamps.clear(); lastT = -1;
             std::lock_guard<std::mutex> g(mu);
+            videoDone = false; replayReq = false;
             latest = Live();
             latest.error = req.kind != 3 && !src ? err : "";
             latest.source = src ? src->describe() : "";
@@ -338,14 +341,33 @@ static void work() {
             if (!faceTracker.load(dir, set.pose.threads, err)) { std::lock_guard<std::mutex> g(mu); latest.error = err; }
         }
         if (!src) { std::this_thread::sleep_for(std::chrono::milliseconds(15)); continue; }
+        // a watched video that reached its end waits on its last frame until the user replays it (or looping is on)
+        {
+            bool done; { std::lock_guard<std::mutex> g(mu); done = videoDone; }
+            if (done) {
+                bool want; { std::lock_guard<std::mutex> g(mu); want = replayReq || set.loopVideo; replayReq = false; }
+                if (!want) { std::this_thread::sleep_for(std::chrono::milliseconds(30)); continue; }
+                bool back = src->seek(0);
+                if (!back && !curFile.empty()) { std::string e; auto s2 = Src::openFile(curFile, e); if (s2) { src = std::move(s2); back = true; } }
+                tracker.reset(); filt.reset(); solver.reset(); faceTracker.reset(); lastT = -1;
+                std::lock_guard<std::mutex> g(mu);
+                videoDone = !back; latest.ended = !back;
+                if (back) continue;   // next loop reads the first frame
+            }
+        }
         double t = 0;
         std::string err;
         if (!src->read(frame, t, err)) {
-            std::lock_guard<std::mutex> g(mu);
             if (err == "end") {
+                bool all; { std::lock_guard<std::mutex> g(mu); all = trackingAll; }
+                std::lock_guard<std::mutex> g(mu);
                 latest.ended = true;
-                if (rec && trackingAll) finishRecording();
-            } else latest.error = err;
+                if (all) { finishRecording(); src.reset(); sourceIsOpen = false; }
+                else videoDone = true;   // keep the source so it can be played again or looped
+                continue;
+            }
+            std::lock_guard<std::mutex> g(mu);
+            latest.error = err;
             src.reset();
             sourceIsOpen = false;
             continue;
@@ -440,6 +462,8 @@ static void tickCountdown() {
     if (countdownUntil > 0 && Util::now() >= countdownUntil) { countdownUntil = 0; rec = true; recTake = Clip::Take(); recStart = -1; }
 }
 void resetTracking() { std::lock_guard<std::mutex> g(mu); resetNew = true; }
+void replayVideo() { std::lock_guard<std::mutex> g(mu); if (videoDone) replayReq = true; }
+bool videoEnded() { std::lock_guard<std::mutex> g(mu); return videoDone; }
 void calibrateMarkers() { std::lock_guard<std::mutex> g(mu); calibrateNew = true; }
 void clearMarkers() { std::lock_guard<std::mutex> g(mu); clearMarkersNew = true; }
 void settingsChanged() { std::lock_guard<std::mutex> g(mu); workerSet = st.set; settingsNew = true; st.bakedDirty = true; }
@@ -697,6 +721,8 @@ static void controlsPanel() {
             if (!p.empty()) trackVideo(p);
         }
         check("Mirror the view", &s.mirrorView, "The camera's picture shown as in a mirror (the tracking is the same)");
+        if (videoEnded()) { if (button("Replay", -1, "Play the video again from the start")) replayVideo(); }
+        check("Loop the video", &s.loopVideo, "A watched video starts over when it reaches its end");
     }
     if (section("Tracking")) {
         sliderChoice("Model", &s.pose.model, {"lite", "full", "heavy"}, DEF.pose.model, "BlazePose's landmark model: lite is fastest, heavy most exact");
@@ -973,15 +999,29 @@ static void viewPanel() {
     Skel::Pose takePose;
     bool contact[2] = {false, false};
     const Pose::Result* lm = nullptr;
+    const Face::Result* face = nullptr;
+    Face::Result takeFace;
+    float aspect = 1.0f;
     if (st.showTake && !st.baked.empty()) {
         takePose = Clip::sample(st.baked, st.playhead, st.skel);
         pose = &takePose;
         const size_t f = std::min(st.baked.frames.size() - 1, (size_t)(st.playhead * st.baked.fps));
         contact[0] = st.baked.frames[f].contact[0]; contact[1] = st.baked.frames[f].contact[1];
-    } else if (L.filtered.found) {
-        pose = &L.solved.pose; contact[0] = L.solved.contact[0]; contact[1] = L.solved.contact[1]; lm = &L.filtered;
+        // the take's face at the playhead, if it has one
+        if (st.sel >= 0 && st.sel < (int)st.takes.size()) {
+            const Clip::Take& t = st.takes[st.sel];
+            if (!t.faces.empty()) {
+                const size_t i = Clip::frameAt(t, std::max(0.0, t.in) + st.playhead);
+                if (i < t.faces.size() && t.faces[i].found) { takeFace = t.faces[i]; face = &takeFace; }
+                if (i < t.raw.size() && t.raw[i].frameH > 0) aspect = (float)t.raw[i].frameW / t.raw[i].frameH;
+            }
+        }
+    } else if (L.filtered.found || L.face.found) {
+        if (L.filtered.found) { pose = &L.solved.pose; contact[0] = L.solved.contact[0]; contact[1] = L.solved.contact[1]; lm = &L.filtered; }
+        if (st.set.face.on && L.face.found) face = &L.face;
+        if (!L.frame.empty()) aspect = (float)L.frame.w / std::max(1, L.frame.h);
     }
-    const GLuint tex = View3D::render(w, h, cam3, st.set.look, st.skel, pose, contact, lm, st.set.solver.mirror);
+    const GLuint tex = View3D::render(w, h, cam3, st.set.look, st.skel, pose, contact, lm, st.set.solver.mirror, face, aspect);
     if (tex) ImGui::GetWindowDrawList()->AddImage((ImTextureID)(intptr_t)tex, o, ImVec2(o.x + w, o.y + h), ImVec2(0, 1), ImVec2(1, 0));
     ImGui::InvisibleButton("##view", ImVec2((float)w, (float)h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
     const ImGuiIO& io = ImGui::GetIO();
@@ -993,9 +1033,10 @@ static void viewPanel() {
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) cam3.reset();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddText(ImVec2(o.x + 10, o.y + 8), C_DIM, st.showTake && !st.baked.empty() ? T("Take") : T("Live"));
-    ImGui::SetCursorScreenPos(ImVec2(o.x + w - 250, o.y + 6));
+    ImGui::SetCursorScreenPos(ImVec2(o.x + w - 330, o.y + 6));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
     if (ImGui::Checkbox(T("Body"), &st.set.look.mannequin)) changed = true; ImGui::SameLine();
+    if (st.set.face.on) { if (ImGui::Checkbox(T("Face"), &st.set.look.face)) changed = true; ImGui::SameLine(); }
     if (ImGui::Checkbox(T("Floor"), &st.set.look.floor)) changed = true; ImGui::SameLine();
     if (ImGui::Checkbox(T("Points"), &st.set.look.landmarks)) changed = true;
     ImGui::PopStyleVar();

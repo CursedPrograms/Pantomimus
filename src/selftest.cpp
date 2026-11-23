@@ -157,6 +157,21 @@ static void skeletonAndSolver(const std::string& dir) {
     Skel::World gm; Skel::forward(s, fm.pose, gm);
     const V3 l = want.tail[ro.lowerarm[0]] - want.head[ro.lowerarm[0]], rr = gm.tail[ro.lowerarm[1]] - gm.head[ro.lowerarm[1]];
     check(vAngle(V3(-l.x, l.y, l.z), rr) < 3.0f, "mirroring", "%.2f deg", vAngle(V3(-l.x, l.y, l.z), rr));
+    // an occluded arm is held, not snapped straight: solve the bent-arm frame, then the same frame with the left arm's
+    // landmarks hidden; with UNSEEN_HOLD (the default) the elbow keeps its bend
+    {
+        Solver::Solver sh; Solver::Settings hs; hs.rootMode = Solver::ROOT_IN_PLACE;
+        Solver::Frame f1; sh.solve(s, r, 0, hs, f1);        // arm seen: sets the solver's "previous"
+        Pose::Result hidden = r;
+        for (int i : {Pose::L_SHOULDER, Pose::L_ELBOW, Pose::L_WRIST, Pose::L_INDEX, Pose::L_PINKY, Pose::L_THUMB}) hidden.visibility[i] = hidden.presence[i] = 0.1f;
+        Solver::Frame f2; sh.solve(s, hidden, 0.033, hs, f2);
+        Skel::World g1, g2; Skel::forward(s, f1.pose, g1); Skel::forward(s, f2.pose, g2);
+        const float held = vAngle(g2.tail[ro.lowerarm[0]] - g2.head[ro.lowerarm[0]], g1.tail[ro.lowerarm[0]] - g1.head[ro.lowerarm[0]]);
+        // the bent forearm vs. the rest (straight-down) forearm: holding must stay far nearer the bent one
+        Skel::Pose restp; restp.reset(s); Skel::World gr; Skel::forward(s, restp, gr);
+        const float straight = vAngle(g2.tail[ro.lowerarm[0]] - g2.head[ro.lowerarm[0]], gr.tail[ro.lowerarm[0]] - gr.head[ro.lowerarm[0]]);
+        check(held < 5.0f && straight > 20.0f, "an occluded arm holds its bend (not straight)", "held %.1f deg from bent, %.1f from rest", held, straight);
+    }
     // two-bone IK reaches
     Skel::Pose ik = f.pose;
     const V3 target = got.tail[ro.calf[0]] + V3(0.05f, 0.1f, 0.08f);

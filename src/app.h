@@ -36,6 +36,7 @@ struct Settings {
     int camera = 0, camW = 1280, camH = 720;
     float camFps = 30;
     bool mirrorView = true;              // the camera's picture shown as a mirror
+    bool loopVideo = false;              // a watched video starts over when it ends (instead of holding on the last frame)
     bool overlay = true, overlayRoi = false, overlayLabels = false;
     bool tPose = false;                  // the skeleton's rest pose: T (else A, as measured)
     float height = 1.66f;                // the skeleton's height, metres
@@ -104,6 +105,8 @@ void stopRecording();
 bool recording();
 float countdownLeft();                      // seconds, 0 when not counting down
 void resetTracking();
+void replayVideo();                         // a watched video that ended: play it again from the start
+bool videoEnded();                          // a watched video is paused on its last frame
 void calibrateMarkers();                    // the next frame's face is the neutral one: the dots are found and kept
 void clearMarkers();
 void settingsChanged();                     // the worker takes the new settings

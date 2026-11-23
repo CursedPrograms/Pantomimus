@@ -1,6 +1,7 @@
 // Pantomimus - the 3D view (see view3d.h)
 #include "view3d.h"
 #include "export.h"
+#include "face_mesh.h"
 
 #include <SDL.h>
 #include <SDL_opengl.h>
@@ -130,6 +131,39 @@ static void draw(const std::vector<float>& v, GLenum mode, float lit) {
     glDrawArrays(mode, 0, (GLsizei)(v.size() / 9));
 }
 
+// the avatar head: the tracked face landmarks (468 of the mesh) placed in 3D and joined by the canonical topology,
+// smooth-shaded. The landmarks already carry the head's turn, so no extra rotation is needed; they come in image
+// space (x right, y down, z nearer-is-smaller), so y is flipped and the head is scaled to about a head's height and
+// set at `anchor`. aspect = frame width / height, to undo the landmarks' separate x and y normalisation.
+static void faceMesh(std::vector<float>& v, const Face::Result& f, const V3& anchor, float mirror, float aspect) {
+    V3 p[Face::N];
+    V3 lo(1e9f, 1e9f, 1e9f), hi(-1e9f, -1e9f, -1e9f);
+    for (int i = 0; i < 468; ++i) {
+        // image -> model space: x across, y up, z toward the camera; keep proportions with the frame's aspect
+        p[i] = V3((f.image[i].x - 0.5f) * mirror, -(f.image[i].y - 0.5f) / aspect, -f.image[i].z);
+        lo = V3(std::min(lo.x, p[i].x), std::min(lo.y, p[i].y), std::min(lo.z, p[i].z));
+        hi = V3(std::max(hi.x, p[i].x), std::max(hi.y, p[i].y), std::max(hi.z, p[i].z));
+    }
+    const V3 mid = (lo + hi) * 0.5f;
+    const float span = std::max(hi.y - lo.y, 1e-4f);
+    const float scale = 0.23f / span;   // a head is about 23 cm tall
+    for (int i = 0; i < 468; ++i) p[i] = anchor + (p[i] - mid) * scale;
+
+    // per-vertex normals from the triangles, pointed toward the viewer side (the face is a front mask)
+    static std::vector<V3> nrm;
+    nrm.assign(468, V3(0, 0, 0));
+    for (int t = 0; t < Face::MESH_TRIS; ++t) {
+        const int a = Face::MESH_TRI[t * 3], b = Face::MESH_TRI[t * 3 + 1], c = Face::MESH_TRI[t * 3 + 2];
+        const V3 n = M::cross(p[b] - p[a], p[c] - p[a]);
+        nrm[a] = nrm[a] + n; nrm[b] = nrm[b] + n; nrm[c] = nrm[c] + n;
+    }
+    for (int i = 0; i < 468; ++i) { nrm[i] = M::normalize(nrm[i], V3(0, 0, 1)); if (nrm[i].z < 0) nrm[i] = -nrm[i]; }
+
+    const V3 skin(0.82f, 0.64f, 0.54f);
+    for (int t = 0; t < Face::MESH_TRIS; ++t)
+        for (int k = 0; k < 3; ++k) { const int idx = Face::MESH_TRI[t * 3 + k]; vert(v, p[idx], nrm[idx], skin); }
+}
+
 // side colours (content, not controls): the body's left warm, its right cool, the middle grey
 static V3 colourOf(const Skel::Skeleton& s, int b) {
     const std::string& n = s.bones[b].name;
@@ -139,7 +173,7 @@ static V3 colourOf(const Skel::Skeleton& s, int b) {
 }
 
 unsigned render(int w, int h, const Camera& cam, const Look& look, const Skel::Skeleton& s, const Skel::Pose* pose, const bool contact[2],
-                const Pose::Result* lm, bool mirror) {
+                const Pose::Result* lm, bool mirror, const Face::Result* face, float aspect) {
     if (!ready || w < 8 || h < 8) return 0;
     target(w, h);
     p_glBindFramebuffer(GL_FRAMEBUFFER_, fbo);
@@ -195,6 +229,14 @@ unsigned render(int w, int h, const Camera& cam, const Look& look, const Skel::S
         draw(v, GL_LINES, 0);
         v.clear();
         glEnable(GL_DEPTH_TEST);
+    }
+    if (look.face && face && face->found) {   // the shaded avatar head, at the skeleton's head when the body is tracked
+        const Skel::Roles ro = Skel::roles(s);
+        V3 anchor(tgt.x, 1.5f, tgt.z);         // a default head height when there's no body
+        if (pose && pose->local.size() == s.bones.size() && ro.head >= 0) anchor = wd.head[ro.head] + M::rotate(wd.rot[ro.head], V3(0, 0.11f, 0));
+        faceMesh(v, *face, anchor, mirror ? -1.0f : 1.0f, aspect > 0.01f ? aspect : 1.0f);
+        draw(v, GL_TRIANGLES, 1);
+        v.clear();
     }
     if (look.landmarks && lm && lm->found && s.hips >= 0) {   // BlazePose's world landmarks, round the hips
         glPointSize(5);

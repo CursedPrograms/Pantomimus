@@ -23,7 +23,7 @@ struct Settings {
     float spineBend = 1.0f;       // how much of the chest's turn the spine takes (0: the chest alone)
     float forearmTwist = 1.0f;    // the palm turning the forearm
     float visibility = 0.5f;      // a limb whose landmarks are less sure than this is unseen
-    int unseen = UNSEEN_REST;     // an unseen limb: as at rest, or held as last seen
+    int unseen = UNSEEN_HOLD;     // an unseen limb (e.g. an arm behind the body): held as last seen, not snapped to rest
     bool legs = true, arms = true, head = true, torso = true;   // which parts the tracking drives
     float contactHeight = 0.06f;  // metres: a foot this near the floor...
     float contactSpeed = 0.6f;    // ...and slower than this (m/s) is planted
