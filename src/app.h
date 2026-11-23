@@ -2,8 +2,10 @@
 #pragma once
 #include "clip.h"
 #include "export.h"
+#include "face.h"
 #include "filter.h"
 #include "hands.h"
+#include "markers.h"
 #include "image.h"
 #include "link.h"
 #include "pose.h"
@@ -25,6 +27,9 @@ struct Settings {
     Filter::Settings filter;
     Solver::Settings solver;
     Hands::Settings hands;
+    Face::Settings face;
+    Markers::Settings markers;
+    bool markerGuide = true;             // show where to draw the dots
     Clip::Cleanup cleanup;
     Export::Options exportOpts;
     int exportFormat = 0;                // 0 FBX, 1 glTF binary, 2 BVH
@@ -56,6 +61,8 @@ struct Live {
     double t = 0;
     Pose::Result raw, filtered;
     Hands::Result hands;
+    Face::Result face;
+    Markers::Result markers;
     Solver::Frame solved;
     float fps = 0;                       // tracked frames a second
     double ms = 0;                       // the models' time a frame
@@ -97,6 +104,8 @@ void stopRecording();
 bool recording();
 float countdownLeft();                      // seconds, 0 when not counting down
 void resetTracking();
+void calibrateMarkers();                    // the next frame's face is the neutral one: the dots are found and kept
+void clearMarkers();
 void settingsChanged();                     // the worker takes the new settings
 void skeletonChanged();                     // the rest pose or height changed
 

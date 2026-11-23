@@ -2,8 +2,10 @@
 // smoothing, the solving and the clean-up can be changed afterwards and the take made again ("baked") at any frame
 // rate: trimmed, smoothed, the planted feet held still (IK on the legs), made to loop.
 #pragma once
+#include "face.h"
 #include "filter.h"
 #include "hands.h"
+#include "markers.h"
 #include "pose.h"
 #include "skeleton.h"
 #include "solver.h"
@@ -19,6 +21,8 @@ struct Take {
     std::vector<double> t;             // seconds from the take's start
     std::vector<Pose::Result> raw;     // the tracking, as it came from the models (not smoothed)
     std::vector<Hands::Result> hands;  // the hands (empty when they weren't tracked)
+    std::vector<Face::Result> faces;   // the face (empty when it wasn't tracked): its blendshapes and the head's turn
+    std::vector<Markers::Result> markers;   // the Sharpie markers (empty when they weren't tracked), without the blobs
     double in = 0, out = -1;           // the trimmed part, seconds (out < 0: to the end)
     double length() const { return t.empty() ? 0 : t.back(); }
     double outPoint() const { return out < 0 ? length() : std::min(out, length()); }
@@ -60,5 +64,11 @@ void lockFeet(std::vector<Solver::Frame>& frames, const Skel::Skeleton& s, int m
 // a project: the takes (Pantomimus's own file, .pantomimus)
 bool saveProject(const std::string& path, const std::vector<Take>& takes, std::string& err);
 bool loadProject(const std::string& path, std::vector<Take>& takes, std::string& err);
+
+// the face of a take, trimmed: ARKit's blendshapes and the head's turn as Live Link Face writes them (CSV: Timecode,
+// BlendshapeCount, the 52 names with capitals, HeadYaw, HeadPitch, HeadRoll), resampled to fps
+bool exportFaceCsv(const Take& take, float fps, const std::string& path, std::string& err);
+// the Sharpie markers of a take, trimmed: each marker's place in the face's frame (eyes' corners 1 apart) a frame
+bool exportMarkersCsv(const Take& take, const std::string& path, std::string& err);
 
 }  // namespace Clip

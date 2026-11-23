@@ -25,20 +25,26 @@ const std::vector<Model>& models() {
         {"pose_landmarks_detector_heavy.onnx", "https://huggingface.co/unity/inference-engine-blaze-pose/resolve/main/models/pose_landmarks_detector_heavy.onnx", 55181539, "the pose model (heavy)"},
         {"hand_detector.onnx", "https://huggingface.co/unity/inference-engine-blaze-hand/resolve/main/models/hand_detector.onnx", 4589374, "the palm detector"},
         {"hand_landmarks_detector.onnx", "https://huggingface.co/unity/inference-engine-blaze-hand/resolve/main/models/hand_landmarks_detector.onnx", 10903207, "the hand model"},
+        // MediaPipe's Face Landmarker (Apache-2.0): BlazeFace from Unity's inference-engine-blaze-face; the face mesh and
+        // the blendshapes as t9749/mediapipe-face-landmarker-onnx converted them (checked against MediaPipe's own)
+        {"blaze_face_short_range.onnx", "https://huggingface.co/unity/inference-engine-blaze-face/resolve/main/models/blaze_face_short_range.onnx", 418465, "the face detector"},
+        {"face_landmarks_detector.onnx", "https://huggingface.co/t9749/mediapipe-face-landmarker-onnx/resolve/main/face_landmarks_detector.onnx", 4921016, "the face mesh"},
+        {"face_blendshapes.onnx", "https://huggingface.co/t9749/mediapipe-face-landmarker-onnx/resolve/main/face_blendshapes.onnx", 1883829, "the face's blendshapes"},
     };
     return m;
 }
 
-std::vector<Model> needed(int poseModel, bool hands) {
+std::vector<Model> needed(int poseModel, bool hands, bool face) {
     const auto& m = models();
     std::vector<Model> r = {m[0], m[1 + std::max(0, std::min(2, poseModel))]};
     if (hands) r.push_back(m[5]);   // the hands are found from the body: the palm detector is not needed
+    if (face) { r.push_back(m[6]); r.push_back(m[7]); r.push_back(m[8]); }
     return r;
 }
 
-std::vector<Model> missing(const std::string& dir, int poseModel, bool hands) {
+std::vector<Model> missing(const std::string& dir, int poseModel, bool hands, bool face) {
     std::vector<Model> r;
-    for (const Model& m : needed(poseModel, hands))
+    for (const Model& m : needed(poseModel, hands, face))
         if (Util::fileSize(Util::join(dir, m.file)) < m.size / 2) r.push_back(m);
     return r;
 }

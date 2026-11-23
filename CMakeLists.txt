@@ -42,7 +42,7 @@ target_link_libraries(imgui PUBLIC SDL2::SDL2 OpenGL::GL)
 # the parts without a window (tracking, solving, clips, exports, links): the app and the tests use them
 add_library(panto_core STATIC
     src/pose.cpp src/filter.cpp src/skeleton.cpp src/solver.cpp src/clip.cpp src/export.cpp src/link.cpp
-    src/source.cpp src/download.cpp src/util.cpp src/image.cpp src/hands.cpp)
+    src/source.cpp src/download.cpp src/util.cpp src/image.cpp src/hands.cpp src/face.cpp src/markers.cpp)
 target_include_directories(panto_core PUBLIC src ${ORT_DIR} ${STB_DIR})
 if(WIN32)
     target_link_libraries(panto_core PUBLIC ws2_32 mfplat mfreadwrite mf mfuuid ole32 shlwapi winhttp comdlg32 shell32)

@@ -172,6 +172,10 @@ void saveSettings() {
       << "\ncontactHeight=" << s.solver.contactHeight << "\ncontactSpeed=" << s.solver.contactSpeed << "\nfootLock=" << b(s.solver.footLock)
       << "\nhands=" << b(s.hands.on) << "\nhandPresence=" << s.hands.presence << "\nhandRoi=" << s.hands.roiScale << "\ncurl=" << s.hands.curl
       << "\nspread=" << s.hands.spread << "\nhandSmooth=" << s.hands.smooth
+      << "\nface=" << b(s.face.on) << "\nfaceDetect=" << s.face.detectScore << "\nfacePresence=" << s.face.presence << "\nfaceRoi=" << s.face.roiScale
+      << "\nfaceSmooth=" << s.face.smooth << "\nweightSmooth=" << s.face.weightSmooth << "\nfaceGain=" << s.face.gain << "\neyesFromIris=" << b(s.face.eyesFromIris)
+      << "\nfaceFromBody=" << b(s.face.fromBody) << "\nmarkers=" << b(s.markers.on) << "\nmarkerGuide=" << b(s.markerGuide) << "\nmarkerDark=" << s.markers.darkness
+      << "\nmarkerMin=" << s.markers.minDot << "\nmarkerMax=" << s.markers.maxDot << "\nmarkerSearch=" << s.markers.search << "\nmarkerBlend=" << s.markers.blend << "\nmarkerRound=" << s.markers.roundness
       << "\nfps=" << s.cleanup.fps << "\nsmooth=" << s.cleanup.smooth << "\ncleanFootLock=" << b(s.cleanup.footLock) << "\nminPlant=" << s.cleanup.minPlant
       << "\nlockBlend=" << s.cleanup.lockBlend << "\nloop=" << b(s.cleanup.loop) << "\nloopFrames=" << s.cleanup.loopFrames << "\ninPlace=" << b(s.cleanup.inPlace)
       << "\nstartAtOrigin=" << b(s.cleanup.startAtOrigin)
@@ -202,6 +206,9 @@ static void loadSettings() {
             {"spineBend", &s.solver.spineBend}, {"forearmTwist", &s.solver.forearmTwist}, {"limbVisibility", &s.solver.visibility},
             {"contactHeight", &s.solver.contactHeight}, {"contactSpeed", &s.solver.contactSpeed}, {"handPresence", &s.hands.presence},
             {"handRoi", &s.hands.roiScale}, {"curl", &s.hands.curl}, {"spread", &s.hands.spread}, {"handSmooth", &s.hands.smooth},
+            {"faceDetect", &s.face.detectScore}, {"facePresence", &s.face.presence}, {"faceRoi", &s.face.roiScale}, {"faceSmooth", &s.face.smooth},
+            {"weightSmooth", &s.face.weightSmooth}, {"faceGain", &s.face.gain}, {"markerDark", &s.markers.darkness}, {"markerMin", &s.markers.minDot},
+            {"markerMax", &s.markers.maxDot}, {"markerSearch", &s.markers.search}, {"markerBlend", &s.markers.blend}, {"markerRound", &s.markers.roundness},
             {"fps", &s.cleanup.fps}, {"smooth", &s.cleanup.smooth}, {"lockBlend", &s.cleanup.lockBlend}, {"loopFrames", &s.cleanup.loopFrames},
             {"exportScale", &s.exportOpts.scale}, {"height", &s.height}, {"pygRate", &s.pygRate}};
         static const std::map<std::string, int*> ints = {
@@ -213,6 +220,7 @@ static void loadSettings() {
             {"overlayRoi", &s.overlayRoi}, {"overlayLabels", &s.overlayLabels}, {"refine", &s.pose.refine}, {"filterOn", &s.filter.on},
             {"mirror", &s.solver.mirror}, {"groundLock", &s.solver.groundLock}, {"legs", &s.solver.legs}, {"arms", &s.solver.arms},
             {"head", &s.solver.head}, {"torso", &s.solver.torso}, {"footLock", &s.solver.footLock}, {"hands", &s.hands.on},
+            {"face", &s.face.on}, {"eyesFromIris", &s.face.eyesFromIris}, {"faceFromBody", &s.face.fromBody}, {"markers", &s.markers.on}, {"markerGuide", &s.markerGuide},
             {"cleanFootLock", &s.cleanup.footLock}, {"loop", &s.cleanup.loop}, {"inPlace", &s.cleanup.inPlace}, {"startAtOrigin", &s.cleanup.startAtOrigin},
             {"mannequin", &s.exportOpts.mannequin}, {"tPose", &s.tPose}, {"lookMannequin", &s.look.mannequin}, {"lookBones", &s.look.bones},
             {"lookFloor", &s.look.floor}, {"lookLandmarks", &s.look.landmarks}, {"lookFollow", &s.look.follow}};
@@ -239,6 +247,7 @@ Request request;
 Settings workerSet;            // the settings the worker uses (copied when they change)
 Skel::Skeleton workerSkel;
 bool settingsNew = true, skeletonNew = true, resetNew = false;
+bool calibrateNew = false, clearMarkersNew = false;
 Live latest;
 bool rec = false, trackingAll = false;
 double recStart = -1, countdownUntil = 0;
@@ -272,6 +281,8 @@ static void work() {
     std::unique_ptr<Src::Source> src;
     Pose::Tracker tracker;
     Hands::Tracker handTracker;
+    Face::Tracker faceTracker;
+    Markers::Tracker markerTracker;
     Filter::Landmarks filt;
     Solver::Solver solver;
     Settings set; Skel::Skeleton skel;
@@ -287,14 +298,15 @@ static void work() {
             req = request; request = Request();
             if (settingsNew) { set = workerSet; settingsNew = false; }
             if (skeletonNew) { skel = workerSkel; skeletonNew = false; solver.reset(); }
-            if (resetNew) { tracker.reset(); filt.reset(); solver.reset(); resetNew = false; }
+            if (resetNew) { tracker.reset(); filt.reset(); solver.reset(); faceTracker.reset(); resetNew = false; }
+            if (clearMarkersNew) { markerTracker.clear(); clearMarkersNew = false; }
         }
         if (req.kind) {
             src.reset();
             std::string err;
             if (req.kind == 1) src = Src::openCamera(req.camera, set.camW, set.camH, set.camFps, err);
             else if (req.kind == 2) src = Src::openFile(req.path, err);
-            tracker.reset(); filt.reset(); solver.reset(); stamps.clear(); lastT = -1;
+            tracker.reset(); filt.reset(); solver.reset(); faceTracker.reset(); stamps.clear(); lastT = -1;
             std::lock_guard<std::mutex> g(mu);
             latest = Live();
             latest.error = req.kind != 3 && !src ? err : "";
@@ -319,6 +331,11 @@ static void work() {
         if (set.hands.on && !handTracker.loaded() && Util::fileExists(Util::join(dir, Hands::LANDMARK_FILE))) {
             std::string err;
             if (!handTracker.load(dir, set.pose.threads, err)) { std::lock_guard<std::mutex> g(mu); latest.error = err; }
+        }
+        if (set.face.on && !faceTracker.loaded() && Util::fileExists(Util::join(dir, Face::LANDMARK_FILE)) &&
+            Util::fileExists(Util::join(dir, Face::BLENDSHAPE_FILE)) && Util::fileExists(Util::join(dir, Face::DETECTOR_FILE))) {
+            std::string err;
+            if (!faceTracker.load(dir, set.pose.threads, err)) { std::lock_guard<std::mutex> g(mu); latest.error = err; }
         }
         if (!src) { std::this_thread::sleep_for(std::chrono::milliseconds(15)); continue; }
         double t = 0;
@@ -353,10 +370,25 @@ static void work() {
             if (!handTracker.process(frame, filtered, set.hands, hands, err)) { std::lock_guard<std::mutex> g(mu); latest.error = err; }
             else if (!skel.empty()) Hands::solveFingers(skel, hands, set.solver.mirror, set.hands, solved.pose);
         }
+        // the face: from the body's face when the body is tracked, else found on its own (a close-up); the Sharpie
+        // markers correct its mesh before the blendshapes are read, and a calibration asked for takes this frame's face
+        Face::Result face;
+        Markers::Result marks;
+        if (set.face.on && faceTracker.loaded()) {
+            bool calibrate = false;
+            { std::lock_guard<std::mutex> g(mu); calibrate = calibrateNew; calibrateNew = false; }
+            std::function<void(Face::Result&)> adjust;
+            if (set.markers.on)
+                adjust = [&](Face::Result& f) {
+                    if (calibrate) markerTracker.calibrate(frame, f, set.markers);
+                    markerTracker.track(frame, f, set.markers, marks);
+                };
+            if (!faceTracker.process(frame, filtered.found ? &filtered : nullptr, set.face, face, err, adjust)) { std::lock_guard<std::mutex> g(mu); latest.error = err; }
+        }
         const double now = Util::now();
         stamps.push_back(now);
         while (stamps.size() > 1 && now - stamps.front() > 1.0) stamps.pop_front();
-        if (server.running() && !skel.empty() && filtered.found) server.send(skel, solved.pose, t, solved.contact);
+        if (server.running() && !skel.empty() && (filtered.found || face.found)) server.send(skel, solved.pose, t, solved.contact, set.face.on ? &face : nullptr);
         if (pyg.running() && !skel.empty() && filtered.found) pyg.send(skel, solved.pose);
         std::lock_guard<std::mutex> g(mu);
         if (rec) {
@@ -364,12 +396,14 @@ static void work() {
             recTake.t.push_back(t - recStart);
             recTake.raw.push_back(raw);
             if (set.hands.on) recTake.hands.push_back(hands);
+            if (set.face.on) recTake.faces.push_back(face);
+            if (set.face.on && set.markers.on) { Markers::Result m = marks; m.blobs.clear(); recTake.markers.push_back(m); }
             if (recTake.source.empty()) recTake.source = latest.source;
         }
         latest.frame = frame;   // copied: the next read fills `frame`
         latest.frameNo = ++frameNo;
         latest.t = t;
-        latest.raw = raw; latest.filtered = filtered; latest.solved = solved; latest.hands = hands;
+        latest.raw = raw; latest.filtered = filtered; latest.solved = solved; latest.hands = hands; latest.face = face; latest.markers = marks;
         latest.fps = stamps.size() > 1 ? (float)((stamps.size() - 1) / std::max(1e-3, stamps.back() - stamps.front())) : 0;
         latest.ms = raw.ms;
         latest.videoPos = src->isFile() ? t : 0;
@@ -406,6 +440,8 @@ static void tickCountdown() {
     if (countdownUntil > 0 && Util::now() >= countdownUntil) { countdownUntil = 0; rec = true; recTake = Clip::Take(); recStart = -1; }
 }
 void resetTracking() { std::lock_guard<std::mutex> g(mu); resetNew = true; }
+void calibrateMarkers() { std::lock_guard<std::mutex> g(mu); calibrateNew = true; }
+void clearMarkers() { std::lock_guard<std::mutex> g(mu); clearMarkersNew = true; }
 void settingsChanged() { std::lock_guard<std::mutex> g(mu); workerSet = st.set; settingsNew = true; st.bakedDirty = true; }
 void skeletonChanged() {
     Skel::Skeleton s = st.set.tPose ? Skel::toTPose(st.measured) : st.measured;
@@ -520,7 +556,7 @@ void setLanguage(const std::string& code) {
 // ---------------------------------------------------------------- models
 std::vector<std::string> missingModels() {
     std::vector<std::string> r;
-    for (const auto& m : Download::missing(st.modelsDir(), st.set.pose.model, st.set.hands.on)) r.push_back(m.file);
+    for (const auto& m : Download::missing(st.modelsDir(), st.set.pose.model, st.set.hands.on, st.set.face.on)) r.push_back(m.file);
     return r;
 }
 void downloadModels() {
@@ -528,7 +564,7 @@ void downloadModels() {
     if (downloader.joinable()) downloader.join();
     dlProgress = 0; dlCancel = false;
     const std::string dir = st.modelsDir();
-    const auto list = Download::missing(dir, st.set.pose.model, st.set.hands.on);
+    const auto list = Download::missing(dir, st.set.pose.model, st.set.hands.on, st.set.face.on);
     downloader = std::thread([dir, list] {
         std::string status, err;
         const bool ok = Download::fetch(dir, list, dlProgress, status, err, dlCancel);
@@ -715,6 +751,39 @@ static void controlsPanel() {
         sliderF("Spread", &s.hands.spread, 0.0f, 1.0f, "%.2f", DEF.hands.spread);
         sliderF("Finger smoothing", &s.hands.smooth, 0.0f, 0.95f, "%.2f", DEF.hands.smooth);
     }
+    if (section("Face", false)) {
+        if (check("Track the face", &s.face.on, "MediaPipe's Face Landmarker: 478 points and ARKit's 52 blendshapes") && s.face.on && !missingModels().empty()) downloadModels();
+        check("Start from the body's face", &s.face.fromBody, "When the body is in view, the face is looked for where the body's face is");
+        sliderF("Face detection", &s.face.detectScore, 0.1f, 0.95f, "%.2f", DEF.face.detectScore);
+        sliderF("Face presence", &s.face.presence, 0.1f, 0.95f, "%.2f", DEF.face.presence);
+        sliderF("Face region", &s.face.roiScale, 1.1f, 2.5f, "%.2f", DEF.face.roiScale, "The region round the face (MediaPipe: 1.5)");
+        sliderF("Face smoothing", &s.face.smooth, 0.0f, 0.95f, "%.2f", DEF.face.smooth, "The mesh's points from frame to frame");
+        sliderF("Blendshape smoothing", &s.face.weightSmooth, 0.0f, 0.95f, "%.2f", DEF.face.weightSmooth);
+        sliderF("Expression strength", &s.face.gain, 0.0f, 2.0f, "%.2f", DEF.face.gain, "Every blendshape times this");
+        check("Eyes from the irises", &s.face.eyesFromIris, "eyeLook from where each iris sits in its eye, instead of the model's");
+    }
+    if (section("Sharpie markers", false)) {
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextDisabled("%s", T("Dots drawn on the face with a Sharpie, tracked to sharpen the face where it moves most."));
+        ImGui::PopTextWrapPos();
+        if (check("Use the markers", &s.markers.on, "Needs the face tracked") && s.markers.on && !s.face.on) { s.face.on = true; if (!missingModels().empty()) downloadModels(); }
+        check("Show where to draw them", &s.markerGuide, "Numbered spots on your face in the camera view");
+        const Live LM = live();
+        const float bw = (ImGui::GetContentRegionAvail().x - 6) / 2;
+        if (button("Calibrate", bw, "Look at the camera with a still, neutral face, then press: each dot is found and kept")) calibrateMarkers();
+        ImGui::SameLine();
+        if (button("Clear", bw)) clearMarkers();
+        if (s.markers.on) {
+            if (LM.markers.calibrated) ImGui::Text("%s %d / %d", T("Dots tracked:"), LM.markers.found, Markers::COUNT);
+            else ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.3f, 1), "%s", T("Not calibrated"));
+        }
+        sliderF("Dot darkness", &s.markers.darkness, 0.05f, 0.6f, "%.2f", DEF.markers.darkness, "How much darker than the skin round it a dot is");
+        sliderF("Smallest dot", &s.markers.minDot, 0.002f, 0.03f, "%.3f", DEF.markers.minDot, "Its radius, as a share of the face's width");
+        sliderF("Largest dot", &s.markers.maxDot, 0.01f, 0.08f, "%.3f", DEF.markers.maxDot);
+        sliderF("Roundness", &s.markers.roundness, 0.2f, 0.9f, "%.2f", DEF.markers.roundness, "Brows and hair are long, dots are round");
+        sliderF("Search", &s.markers.search, 0.01f, 0.2f, "%.3f", DEF.markers.search, "How far from where the mesh puts it a dot may be found");
+        sliderF("Marker weight", &s.markers.blend, 0.0f, 1.0f, "%.2f", DEF.markers.blend, "How much the dots move the face's mesh (0: only tracked)");
+    }
     if (section("Recording")) {
         const bool r = recording();
         const float cd = countdownLeft();
@@ -794,6 +863,30 @@ static void drawLandmarks(ImDrawList* dl, ImVec2 o, ImVec2 sz, const Pose::Resul
         }
 }
 
+static void drawFace(ImDrawList* dl, ImVec2 o, ImVec2 sz, const Face::Result& f, const Markers::Result* mk, bool mirror, bool guide, int fw, int fh) {
+    auto at = [&](float x, float y) { if (mirror) x = 1 - x; return ImVec2(o.x + x * sz.x, o.y + y * sz.y); };
+    for (const auto& e : Face::contour()) dl->AddLine(at(f.image[e.first].x, f.image[e.first].y), at(f.image[e.second].x, f.image[e.second].y), C_MID, 1.2f);
+    for (int iris : {Face::R_IRIS, Face::L_IRIS}) {
+        const float r = std::hypot((f.image[iris + 1].x - f.image[iris + 3].x) * sz.x, (f.image[iris + 1].y - f.image[iris + 3].y) * sz.y) / 2;
+        dl->AddCircle(at(f.image[iris].x, f.image[iris].y), std::max(2.0f, r), C_BLUE, 16, 1.5f);
+    }
+    if (guide && (!mk || !mk->calibrated)) {
+        // where to draw each dot: numbered, on the performer's own face
+        for (int i = 0; i < Markers::COUNT; ++i) {
+            float px, py; Markers::spotPosition(f, i, fw, fh, px, py);
+            const ImVec2 c = at(px / fw, py / fh);
+            dl->AddCircle(c, 5, IM_COL32(80, 220, 120, 255), 12, 2);
+            char n[8]; snprintf(n, sizeof n, "%d", i + 1);
+            dl->AddText(ImVec2(c.x + 6, c.y - 7), IM_COL32(80, 220, 120, 255), n);
+        }
+    }
+    if (mk) {
+        for (const auto& b : mk->blobs) dl->AddCircle(at(b.x / fw, b.y / fh), std::max(2.0f, b.r * sz.x / fw), C_DIM, 10, 1);
+        for (int i = 0; i < Markers::COUNT; ++i)
+            if (mk->seen[i]) dl->AddCircleFilled(at(mk->x[i], mk->y[i]), 3.5f, IM_COL32(240, 80, 70, 255), 10);
+    }
+}
+
 static GLuint camTex = 0;
 static int camTexW = 0, camTexH = 0;
 static long long camTexNo = -1;
@@ -832,6 +925,7 @@ static void cameraPanel() {
         if (!takeView && camTex) dl->AddImage((ImTextureID)(intptr_t)camTex, p0, ImVec2(p0.x + sz.x, p0.y + sz.y), ImVec2(mirror ? 1.0f : 0.0f, 0), ImVec2(mirror ? 0.0f : 1.0f, 1));
         else dl->AddRect(p0, ImVec2(p0.x + sz.x, p0.y + sz.y), C_LINE);
         if (st.set.overlay && lm) drawLandmarks(dl, p0, sz, *lm, mirror, st.set.overlayLabels, hd);
+        if (st.set.overlay && !takeView && L.face.found) drawFace(dl, p0, sz, L.face, st.set.markers.on ? &L.markers : nullptr, mirror, st.set.markers.on && st.set.markerGuide, fw, fh);
         if (st.set.overlayRoi && !takeView && L.raw.roi.valid) {
             const Pose::Roi& r = L.raw.roi;
             const float c = std::cos(r.rot), s = std::sin(r.rot), h = r.size / 2;
@@ -850,7 +944,7 @@ static void cameraPanel() {
     if (takeView) msg = st.takes[st.sel].name.c_str();
     else if (L.frame.empty()) msg = !L.error.empty() ? L.error.c_str() : T("Start the camera (F5), or open a video");
     if (msg) dl->AddText(ImVec2(o.x + 12, o.y + 10), takeView ? C_DIM : (L.error.empty() ? C_DIM : C_ERROR), msg);
-    if (!takeView && !L.frame.empty() && !L.filtered.found) dl->AddText(ImVec2(o.x + 12, o.y + 10), C_WARN, T("No one in view"));
+    if (!takeView && !L.frame.empty() && !L.filtered.found && !L.face.found) dl->AddText(ImVec2(o.x + 12, o.y + 10), C_WARN, T("No one in view"));
     const float cd = countdownLeft();
     if (cd > 0) {
         char b[8]; snprintf(b, sizeof b, "%.0f", std::ceil(cd));
@@ -1023,27 +1117,71 @@ static void takesPanel() {
     }
 }
 
-static void landmarksPanel() {
-    const Live L = live();
-    const Pose::Result& r = L.filtered;
-    ImGui::TextDisabled("%s %.2f", T("Person:"), r.found ? r.score : 0.0f);
-    if (ImGui::BeginTable("##lm", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
-        ImGui::TableSetupColumn(T("Landmark"), ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn(T("Seen"), ImGuiTableColumnFlags_WidthFixed, 90);
-        for (int i = 0; i < Pose::N; ++i) {
-            ImGui::TableNextRow();
+static void bar(float v, bool strong) {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(ImVec2(p.x, p.y + 4), ImVec2(p.x + 84, p.y + 14), C_WELL);
+    dl->AddRectFilled(ImVec2(p.x, p.y + 4), ImVec2(p.x + 84 * std::clamp(v, 0.0f, 1.0f), p.y + 14), strong ? C_BLUE : C_DIM);
+    ImGui::Dummy(ImVec2(84, 16));
+}
+
+static void facePanel(const Live& L) {
+    const Face::Result& f = L.face;
+    if (!st.set.face.on) { ImGui::TextDisabled("%s", T("Turn on Face in the controls")); return; }
+    ImGui::TextDisabled("%s %.2f   %s %.0f  %s %.0f  %s %.0f", T("Face:"), f.found ? f.score : 0.0f, T("yaw"), f.yaw, T("pitch"), f.pitch, T("roll"), f.roll);
+    if (ImGui::BeginTable("##bs", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupColumn(T("Blendshape"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(T("Weight"), ImGuiTableColumnFlags_WidthFixed, 90);
+        for (int i = 1; i < Face::BLENDSHAPES; ++i) {
+            ImGui::TableNextRow(); ImGui::TableNextColumn();
+            ImGui::TextUnformatted(Face::BLENDSHAPE_NAMES[i]);
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(T(Pose::landmarkName(i)));
-            ImGui::TableNextColumn();
-            const float v = r.found ? r.visibility[i] : 0;
-            const ImVec2 p = ImGui::GetCursorScreenPos();
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(ImVec2(p.x, p.y + 4), ImVec2(p.x + 84, p.y + 14), C_WELL);
-            dl->AddRectFilled(ImVec2(p.x, p.y + 4), ImVec2(p.x + 84 * v, p.y + 14), v >= st.set.filter.visibility ? C_BLUE : C_DIM);
-            ImGui::Dummy(ImVec2(84, 16));
+            bar(f.found ? f.weights[i] : 0, true);
         }
         ImGui::EndTable();
     }
+}
+
+static void markersPanel(const Live& L) {
+    if (!st.set.markers.on) { ImGui::TextDisabled("%s", T("Turn on Sharpie markers in the controls")); return; }
+    ImGui::TextDisabled("%s %d / %d", T("Dots:"), L.markers.found, Markers::COUNT);
+    if (ImGui::BeginTable("##mk", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupColumn(T("Marker"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(T("Seen"), ImGuiTableColumnFlags_WidthFixed, 90);
+        for (int i = 0; i < Markers::COUNT; ++i) {
+            ImGui::TableNextRow(); ImGui::TableNextColumn();
+            ImGui::Text("%d  %s", i + 1, T(Markers::LAYOUT[i].name));
+            ImGui::TableNextColumn();
+            bar(L.markers.seen[i] ? 1.0f : 0.0f, true);
+        }
+        ImGui::EndTable();
+    }
+}
+
+static void landmarksPanel() {
+    const Live L = live();
+    const Pose::Result& r = L.filtered;
+    if (!ImGui::BeginTabBar("##lmtabs")) return;
+    if (ImGui::BeginTabItem(T("Body"))) {
+        ImGui::TextDisabled("%s %.2f", T("Person:"), r.found ? r.score : 0.0f);
+        if (ImGui::BeginTable("##lm", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+            ImGui::TableSetupColumn(T("Landmark"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(T("Seen"), ImGuiTableColumnFlags_WidthFixed, 90);
+            for (int i = 0; i < Pose::N; ++i) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(T(Pose::landmarkName(i)));
+                ImGui::TableNextColumn();
+                const float v = r.found ? r.visibility[i] : 0;
+                bar(v, v >= st.set.filter.visibility);
+            }
+            ImGui::EndTable();
+        }
+        ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(T("Face"))) { facePanel(L); ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem(T("Markers"))) { markersPanel(L); ImGui::EndTabItem(); }
+    ImGui::EndTabBar();
 }
 
 static void prefsWindow() {
@@ -1118,6 +1256,18 @@ static void menuBar() {
         if (ImGui::MenuItem(T("Track a whole video..."))) { const std::string p = Util::openFile(T("Track a video"), {{"Video", "*.mp4;*.mov;*.avi;*.mkv;*.wmv;*.webm"}}); if (!p.empty()) trackVideo(p); }
         ImGui::Separator();
         if (ImGui::MenuItem(T("Export the take..."), "Ctrl+E", false, st.sel >= 0)) exportDialog(st.sel);
+        const bool hasFace = st.sel >= 0 && st.sel < (int)st.takes.size() && !st.takes[st.sel].faces.empty();
+        const bool hasMarks = st.sel >= 0 && st.sel < (int)st.takes.size() && !st.takes[st.sel].markers.empty();
+        if (ImGui::MenuItem(T("Export the face (Live Link Face CSV)..."), nullptr, false, hasFace)) {
+            const std::string path = Util::saveFile(T("Export the face"), st.takes[st.sel].name + " face.csv", {{"CSV", "*.csv"}});
+            std::string err;
+            if (!path.empty()) say(Clip::exportFaceCsv(st.takes[st.sel], st.set.cleanup.fps, path, err) ? std::string(T("Exported: ")) + path : err);
+        }
+        if (ImGui::MenuItem(T("Export the markers (CSV)..."), nullptr, false, hasMarks)) {
+            const std::string path = Util::saveFile(T("Export the markers"), st.takes[st.sel].name + " markers.csv", {{"CSV", "*.csv"}});
+            std::string err;
+            if (!path.empty()) say(Clip::exportMarkersCsv(st.takes[st.sel], path, err) ? std::string(T("Exported: ")) + path : err);
+        }
         if (ImGui::MenuItem(T("Open the exports folder"))) Util::openFolder(exportsDir());
         ImGui::Separator();
         if (ImGui::MenuItem(T("Quit"), "Alt+F4")) st.quit = true;
@@ -1424,7 +1574,7 @@ int run(int argc, char** argv) {
         if (ImGui::BeginPopupModal("##models", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize)) {
             ImGui::PushFont(fontBold); ImGui::TextUnformatted(T("Pantomimus needs its pose models")); ImGui::PopFont();
             long long bytes = 0;
-            for (const auto& m : Download::missing(st.modelsDir(), st.set.pose.model, st.set.hands.on)) bytes += m.size;
+            for (const auto& m : Download::missing(st.modelsDir(), st.set.pose.model, st.set.hands.on, st.set.face.on)) bytes += m.size;
             ImGui::TextWrapped(T("BlazePose (MediaPipe, Apache-2.0): about %.0f MB from Hugging Face, into %s. They're fetched once."), bytes / 1e6, st.modelsDir().c_str());
             const float p = downloadProgress();
             if (p >= 0) { ImGui::ProgressBar(p, ImVec2(-1, 0)); }

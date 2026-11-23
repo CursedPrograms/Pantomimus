@@ -51,11 +51,13 @@ std::string skeletonMessage(const Skel::Skeleton& s, int naming) {
         o << (i ? "," : "") << "{\"name\":\"" << Skel::nameOf(s, (int)i, naming) << "\",\"parent\":" << b.parent
           << ",\"head\":[" << f6(b.head.x) << "," << f6(b.head.y) << "," << f6(b.head.z) << "],\"tail\":[" << f6(b.tail.x) << "," << f6(b.tail.y) << "," << f6(b.tail.z) << "]}";
     }
+    o << "],\"faceNames\":[";
+    for (int i = 0; i < Face::BLENDSHAPES; ++i) o << (i ? "," : "") << "\"" << Face::BLENDSHAPE_NAMES[i] << "\"";
     o << "]}\n";
     return o.str();
 }
 
-std::string poseMessage(const Skel::Skeleton& s, const Skel::Pose& p, double t, const bool contact[2]) {
+std::string poseMessage(const Skel::Skeleton& s, const Skel::Pose& p, double t, const bool contact[2], const Face::Result* face) {
     Skel::World w; Skel::forward(s, p, w);
     std::ostringstream o;
     o << "{\"type\":\"pose\",\"time\":" << f6((float)t) << ",\"bones\":[";
@@ -63,7 +65,13 @@ std::string poseMessage(const Skel::Skeleton& s, const Skel::Pose& p, double t, 
         const M::Q& q = w.rot[i]; const M::V3& h = w.head[i];
         o << (i ? "," : "") << "[" << f6(q.w) << "," << f6(q.x) << "," << f6(q.y) << "," << f6(q.z) << "," << f6(h.x) << "," << f6(h.y) << "," << f6(h.z) << "]";
     }
-    o << "],\"contact\":[" << (contact && contact[0] ? 1 : 0) << "," << (contact && contact[1] ? 1 : 0) << "]}\n";
+    o << "],\"contact\":[" << (contact && contact[0] ? 1 : 0) << "," << (contact && contact[1] ? 1 : 0) << "]";
+    if (face && face->found) {
+        o << ",\"face\":[";
+        for (int i = 0; i < Face::BLENDSHAPES; ++i) o << (i ? "," : "") << f6(face->weights[i]);
+        o << "]";
+    }
+    o << "}\n";
     return o.str();
 }
 
@@ -166,13 +174,13 @@ void Server::setSkeleton(const Skel::Skeleton& s, int naming) {
     impl_->cv.notify_one();
 }
 
-void Server::send(const Skel::Skeleton& s, const Skel::Pose& p, double t, const bool contact[2]) {
+void Server::send(const Skel::Skeleton& s, const Skel::Pose& p, double t, const bool contact[2], const Face::Result* face) {
     if (!impl_) return;
     {
         std::lock_guard<std::mutex> g(impl_->mu);
         if (impl_->clients.empty() && impl_->fresh.empty()) return;
     }
-    const std::string m = poseMessage(s, p, t, contact);
+    const std::string m = poseMessage(s, p, t, contact, face);
     std::lock_guard<std::mutex> g(impl_->mu);
     impl_->latest = m; impl_->hasLatest = true;
     impl_->cv.notify_one();

@@ -166,13 +166,36 @@ Skel::Pose sample(const Baked& b, double t, const Skel::Skeleton& s) {
 }
 
 // ---------------------------------------------------------------- the project file
-// "PANTOMIMUS 1\n", then per take: name, source, in, out, frame count, has-hands; then per frame its time and tracking
-static const char MAGIC[] = "PANTOMIMUS 2\n";
+// "PANTOMIMUS 3\n", then per take: name, source, in, out, frame count, has-hands, has-face, has-markers; then per frame
+// its time and tracking. (Version 2 files, without the face, still open.)
+static const char MAGIC[] = "PANTOMIMUS 3\n";
+static const char MAGIC2[] = "PANTOMIMUS 2\n";
 
 template <class T> static void put(std::ofstream& o, const T& v) { o.write((const char*)&v, sizeof v); }
 template <class T> static bool take_(std::ifstream& i, T& v) { return (bool)i.read((char*)&v, sizeof v); }
 static void putStr(std::ofstream& o, const std::string& s) { const uint32_t n = (uint32_t)s.size(); put(o, n); o.write(s.data(), n); }
 static bool getStr(std::ifstream& i, std::string& s) { uint32_t n = 0; if (!take_(i, n) || n > (1u << 20)) return false; s.resize(n); return (bool)i.read(&s[0], n); }
+
+static void putFace(std::ofstream& o, const Face::Result& f) {
+    put(o, (uint8_t)f.found); put(o, f.score);
+    o.write((const char*)f.weights, sizeof f.weights);
+    put(o, f.head.w); put(o, f.head.x); put(o, f.head.y); put(o, f.head.z);
+    put(o, f.yaw); put(o, f.pitch); put(o, f.roll);
+}
+static void getFace(std::ifstream& i, Face::Result& f) {
+    uint8_t found = 0; take_(i, found); f.found = found != 0; take_(i, f.score);
+    i.read((char*)f.weights, sizeof f.weights);
+    take_(i, f.head.w); take_(i, f.head.x); take_(i, f.head.y); take_(i, f.head.z);
+    take_(i, f.yaw); take_(i, f.pitch); take_(i, f.roll);
+}
+static void putMarkers(std::ofstream& o, const Markers::Result& m) {
+    put(o, (uint8_t)m.calibrated); put(o, (int32_t)m.found);
+    for (int k = 0; k < Markers::COUNT; ++k) { put(o, (uint8_t)m.seen[k]); put(o, m.x[k]); put(o, m.y[k]); put(o, m.fx[k]); put(o, m.fy[k]); }
+}
+static void getMarkers(std::ifstream& i, Markers::Result& m) {
+    uint8_t c = 0; int32_t n = 0; take_(i, c); take_(i, n); m.calibrated = c != 0; m.found = n;
+    for (int k = 0; k < Markers::COUNT; ++k) { uint8_t s = 0; take_(i, s); m.seen[k] = s != 0; take_(i, m.x[k]); take_(i, m.y[k]); take_(i, m.fx[k]); take_(i, m.fy[k]); }
+}
 
 bool saveProject(const std::string& path, const std::vector<Take>& takes, std::string& err) {
     std::ofstream o(fs::u8path(path), std::ios::binary);
@@ -184,6 +207,9 @@ bool saveProject(const std::string& path, const std::vector<Take>& takes, std::s
         put(o, t.in); put(o, t.out);
         put(o, (uint32_t)t.raw.size());
         put(o, (uint8_t)(t.hands.size() == t.raw.size() ? 1 : 0));
+        const bool hasFace = t.faces.size() == t.raw.size() && !t.raw.empty();
+        const bool hasMarkers = t.markers.size() == t.raw.size() && !t.raw.empty();
+        put(o, (uint8_t)hasFace); put(o, (uint8_t)hasMarkers);
         for (size_t k = 0; k < t.raw.size(); ++k) {
             const Pose::Result& r = t.raw[k];
             put(o, t.t[k]);
@@ -195,6 +221,8 @@ bool saveProject(const std::string& path, const std::vector<Take>& takes, std::s
                     put(o, (uint8_t)h.found); put(o, h.score);
                     o.write((const char*)h.image, sizeof h.image); o.write((const char*)h.world, sizeof h.world);
                 }
+            if (hasFace) putFace(o, t.faces[k]);
+            if (hasMarkers) putMarkers(o, t.markers[k]);
         }
     }
     if (!o) { err = "Couldn't write all of " + path; return false; }
@@ -205,7 +233,8 @@ bool loadProject(const std::string& path, std::vector<Take>& takes, std::string&
     std::ifstream i(fs::u8path(path), std::ios::binary);
     if (!i) { err = "Can't open " + path; return false; }
     char m[sizeof MAGIC - 1];
-    if (!i.read(m, sizeof m) || memcmp(m, MAGIC, sizeof m) != 0) { err = path + " isn't a Pantomimus project"; return false; }
+    if (!i.read(m, sizeof m) || (memcmp(m, MAGIC, sizeof m) != 0 && memcmp(m, MAGIC2, sizeof m) != 0)) { err = path + " isn't a Pantomimus project"; return false; }
+    const bool v3 = memcmp(m, MAGIC, sizeof m) == 0;
     uint32_t n = 0;
     if (!take_(i, n) || n > 100000) { err = "A broken project"; return false; }
     std::vector<Take> out(n);
@@ -214,8 +243,12 @@ bool loadProject(const std::string& path, std::vector<Take>& takes, std::string&
         if (!getStr(i, t.name) || !getStr(i, t.source) || !take_(i, t.in) || !take_(i, t.out) || !take_(i, frames) || !take_(i, hasHands) || frames > 10000000) {
             err = "A broken project"; return false;
         }
+        uint8_t hasFace = 0, hasMarkers = 0;
+        if (v3 && (!take_(i, hasFace) || !take_(i, hasMarkers))) { err = "A broken project"; return false; }
         t.t.resize(frames); t.raw.resize(frames);
         if (hasHands) t.hands.resize(frames);
+        if (hasFace) t.faces.resize(frames);
+        if (hasMarkers) t.markers.resize(frames);
         for (uint32_t k = 0; k < frames; ++k) {
             Pose::Result& r = t.raw[k];
             uint8_t found = 0; int32_t w = 0, h = 0;
@@ -228,10 +261,73 @@ bool loadProject(const std::string& path, std::vector<Take>& takes, std::string&
                     uint8_t f = 0; take_(i, f); take_(i, hd.score); hd.found = f != 0;
                     i.read((char*)hd.image, sizeof hd.image); i.read((char*)hd.world, sizeof hd.world);
                 }
+            if (hasFace) getFace(i, t.faces[k]);
+            if (hasMarkers) getMarkers(i, t.markers[k]);
             if (!i) { err = "The project ends early"; return false; }
         }
     }
     takes = std::move(out);
+    return true;
+}
+
+// ---------------------------------------------------------------- the face's exports
+// Live Link Face's columns, in its order (ARKit's names with capitals), then the head's and the eyes' turns
+static const char* const LLF[] = {
+    "EyeBlinkLeft", "EyeLookDownLeft", "EyeLookInLeft", "EyeLookOutLeft", "EyeLookUpLeft", "EyeSquintLeft", "EyeWideLeft",
+    "EyeBlinkRight", "EyeLookDownRight", "EyeLookInRight", "EyeLookOutRight", "EyeLookUpRight", "EyeSquintRight", "EyeWideRight",
+    "JawForward", "JawRight", "JawLeft", "JawOpen", "MouthClose", "MouthFunnel", "MouthPucker", "MouthRight", "MouthLeft",
+    "MouthSmileLeft", "MouthSmileRight", "MouthFrownLeft", "MouthFrownRight", "MouthDimpleLeft", "MouthDimpleRight",
+    "MouthStretchLeft", "MouthStretchRight", "MouthRollLower", "MouthRollUpper", "MouthShrugLower", "MouthShrugUpper",
+    "MouthPressLeft", "MouthPressRight", "MouthLowerDownLeft", "MouthLowerDownRight", "MouthUpperUpLeft", "MouthUpperUpRight",
+    "BrowDownLeft", "BrowDownRight", "BrowInnerUp", "BrowOuterUpLeft", "BrowOuterUpRight", "CheekPuff", "CheekSquintLeft",
+    "CheekSquintRight", "NoseSneerLeft", "NoseSneerRight", "TongueOut"};
+
+bool exportFaceCsv(const Take& take, float fps, const std::string& path, std::string& err) {
+    if (take.faces.size() != take.raw.size() || take.raw.empty()) { err = "This take has no face: turn on the face and record it again"; return false; }
+    std::ofstream o(fs::u8path(path));
+    if (!o) { err = "Can't write " + path; return false; }
+    o << "Timecode,BlendshapeCount";
+    for (const char* n : LLF) o << ',' << n;
+    o << ",HeadYaw,HeadPitch,HeadRoll,LeftEyeYaw,LeftEyePitch,LeftEyeRoll,RightEyeYaw,RightEyePitch,RightEyeRoll\n";
+    int col[std::size(LLF)];
+    for (size_t c = 0; c < std::size(LLF); ++c) col[c] = Face::blendshapeIndex(LLF[c]);
+    fps = std::clamp(fps, 1.0f, 240.0f);
+    const double t0 = take.in, t1 = take.outPoint();
+    const int frames = std::max(1, (int)std::floor((t1 - t0) * fps + 1e-6) + 1);
+    for (int f = 0; f < frames; ++f) {
+        const double t = t0 + f / (double)fps;
+        const Face::Result& r = take.faces[frameAt(take, t)];
+        const int ff = f % (int)std::lround(fps), s = f / (int)std::lround(fps);
+        char tc[64];
+        snprintf(tc, sizeof tc, "%02d:%02d:%02d:%02d.000", s / 3600, (s / 60) % 60, s % 60, ff);
+        o << tc << ',' << 61;
+        for (size_t c = 0; c < std::size(LLF); ++c) o << ',' << (col[c] >= 0 && r.found ? r.weights[col[c]] : 0.0f);
+        // the head's turn in Live Link Face's units (radians; yaw, pitch, roll), the eyes' left at 0
+        const float k = M::PI / 180;
+        o << ',' << (r.found ? r.yaw * k : 0) << ',' << (r.found ? r.pitch * k : 0) << ',' << (r.found ? r.roll * k : 0) << ",0,0,0,0,0,0\n";
+    }
+    if (!o) { err = "Couldn't write all of " + path; return false; }
+    return true;
+}
+
+bool exportMarkersCsv(const Take& take, const std::string& path, std::string& err) {
+    if (take.markers.size() != take.raw.size() || take.raw.empty()) { err = "This take has no markers: calibrate them and record it again"; return false; }
+    std::ofstream o(fs::u8path(path));
+    if (!o) { err = "Can't write " + path; return false; }
+    o << "time";
+    for (const Markers::Spot& s : Markers::LAYOUT) o << ",\"" << s.name << " x\",\"" << s.name << " y\"";
+    o << "\n";
+    for (size_t k = 0; k < take.raw.size(); ++k) {
+        if (take.t[k] < take.in - 1e-9 || take.t[k] > take.outPoint() + 1e-9) continue;
+        const Markers::Result& m = take.markers[k];
+        o << (take.t[k] - take.in);
+        for (int i = 0; i < Markers::COUNT; ++i) {
+            if (m.seen[i]) o << ',' << m.fx[i] << ',' << m.fy[i];
+            else o << ",,";
+        }
+        o << "\n";
+    }
+    if (!o) { err = "Couldn't write all of " + path; return false; }
     return true;
 }
 

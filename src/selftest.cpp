@@ -295,6 +295,118 @@ static void tracking(const std::string& testsDir) {
     }
 }
 
+// a round dark dot inked onto a picture (a Sharpie mark): soft-edged, like ink on skin
+static void inkDot(Image& im, float cx, float cy, float r) {
+    for (int y = (int)(cy - r - 2); y <= (int)(cy + r + 2); ++y)
+        for (int x = (int)(cx - r - 2); x <= (int)(cx + r + 2); ++x) {
+            if (x < 0 || y < 0 || x >= im.w || y >= im.h) continue;
+            const float d = std::hypot(x + 0.5f - cx, y + 0.5f - cy);
+            const float a = std::clamp(r + 0.5f - d, 0.0f, 1.0f) * 0.85f;
+            uint8_t* p = &im.rgb[((size_t)y * im.w + x) * 3];
+            for (int c = 0; c < 3; ++c) p[c] = (uint8_t)(p[c] * (1 - a) + 25 * a);
+        }
+}
+
+static void face(const std::string& testsDir) {
+    App::out("face (Face Landmarker) and Sharpie markers");
+    const std::vector<float> a = Face::anchors();
+    check(a.size() == 896 * 4, "the face detector's anchors", "%zu", a.size() / 4);
+    check(Face::blendshapeIndex("jawOpen") == 25 && Face::blendshapeIndex("MOUTHSMILELEFT") == 44, "blendshape names");
+    std::string err;
+    const std::string dir = App::st.modelsDir();
+    if (!Util::fileExists(Util::join(dir, Face::LANDMARK_FILE)) || !Util::fileExists(Util::join(dir, Face::BLENDSHAPE_FILE)) ||
+        !Util::fileExists(Util::join(dir, Face::DETECTOR_FILE))) {
+        App::out("  (the face models aren't in " + dir + ": the face isn't tested)");
+        return;
+    }
+    Image im;
+    if (!Img::load(Util::join(testsDir, "face.jpg"), im, err)) { check(false, "the face picture", "%s", err.c_str()); return; }
+    Face::Tracker tr;
+    if (!tr.load(dir, 0, err)) { check(false, "loading the face models", "%s", err.c_str()); return; }
+    Face::Settings fs_; fs_.smooth = 0; fs_.weightSmooth = 0;
+    Pose::Roi roi; float score = 0;
+    const bool det = tr.detect(im, fs_, roi, score, err);
+    // the face in the test picture: its middle is about (705, 215) of 1408 x 768, about 200 px wide
+    check(det && std::fabs(roi.cx - 705) < 40 && std::fabs(roi.cy - 215) < 50 && roi.size > 200 && roi.size < 450, "BlazeFace finds the face",
+          "score %.2f, at (%.0f, %.0f), %.0f px, %.1f deg", score, roi.cx, roi.cy, roi.size, roi.rot * 180 / M::PI);
+    Face::Result r, r2;
+    tr.process(im, nullptr, fs_, r, err);
+    tr.process(im, nullptr, fs_, r2, err);   // the second frame tracks from the first's landmarks
+    const float W = (float)im.w, H = (float)im.h;
+    const float eyeR = r2.image[Face::R_EYE_OUT].x * W, eyeL = r2.image[Face::L_EYE_OUT].x * W;
+    const float browY = r2.image[105].y * H, eyeY = r2.image[159].y * H, noseY = r2.image[Face::NOSE_TIP].y * H, mouthY = r2.image[Face::LIP_TOP].y * H, chinY = r2.image[Face::CHIN].y * H;
+    check(r.found && r.detected && r2.found && !r2.detected && r2.score > 0.9f, "the face mesh: found, then tracked", "score %.3f, %.0f ms", r2.score, r2.ms);
+    check(eyeR < eyeL && browY < eyeY && eyeY < noseY && noseY < mouthY && mouthY < chinY && eyeL - eyeR > 60 && eyeL - eyeR < 160,
+          "the mesh is a face", "eyes %.0f..%.0f px, brow %.0f < eye %.0f < nose %.0f < mouth %.0f < chin %.0f", eyeR, eyeL, browY, eyeY, noseY, mouthY, chinY);
+    const float irisR = r2.image[Face::R_IRIS].x * W, irisL = r2.image[Face::L_IRIS].x * W;
+    check(std::min(irisR, irisL) > eyeR && std::max(irisR, irisL) < eyeL, "the irises are in the eyes", "%.0f, %.0f", irisR, irisL);
+    const float smile = (r2.weights[44] + r2.weights[45]) / 2, blink = (r2.weights[9] + r2.weights[10]) / 2;
+    check(smile > 0.3f && blink < 0.5f, "blendshapes: he smiles, his eyes are open", "smile %.2f, blink %.2f, jawOpen %.2f", smile, blink, r2.weights[25]);
+    check(std::fabs(r2.yaw) < 20 && std::fabs(r2.pitch) < 25 && std::fabs(r2.roll) < 12, "the head faces the camera",
+          "yaw %.1f, pitch %.1f, roll %.1f", r2.yaw, r2.pitch, r2.roll);
+
+    // Sharpie markers: none on the bare face, then dots inked where Pantomimus says to draw them
+    Markers::Settings ms;
+    const std::vector<Markers::Blob> bare = Markers::findDots(im, r2, ms);
+    std::string where;
+    for (const auto& b : bare) where += " (" + std::to_string((int)b.x) + "," + std::to_string((int)b.y) + ")";
+    check(bare.size() <= 3, "a bare face has (almost) no dots", "%zu%s", bare.size(), where.c_str());
+    Image inked = im;
+    const float rad = std::max(2.5f, (eyeL - eyeR) * 0.045f);
+    for (int i = 0; i < Markers::COUNT; ++i) {
+        float px, py; Markers::spotPosition(r2, i, im.w, im.h, px, py);
+        inkDot(inked, px + 2, py - 1, rad);   // drawn a little off the exact spot, as by hand
+    }
+    Img::savePng(Util::join(Util::tempDir(), "pantomimus_face_inked.png"), inked);   // for `--script markers`
+    Face::Tracker tr2; tr2.load(dir, 0, err);
+    Face::Result rf;
+    tr2.process(inked, nullptr, fs_, rf, err);
+    Markers::Tracker mk;
+    const int cal = mk.calibrate(inked, rf, ms);
+    std::string missing;
+    for (int i = 0; i < Markers::COUNT; ++i) if (!mk.have(i)) missing += std::string(missing.empty() ? " missing: " : ", ") + Markers::LAYOUT[i].name;
+    {   // a picture to look at: where each dot should be (green) and every dot found (red), in the temp folder
+        Image dbg = inked;
+        auto plot = [&](float x, float y, uint8_t r, uint8_t g, uint8_t b) {
+            for (int k = -3; k <= 3; ++k) for (int j : {0}) {
+                const int px = (int)x + k, py = (int)y + j, qx = (int)x + j, qy = (int)y + k;
+                if (px >= 0 && py >= 0 && px < dbg.w && py < dbg.h) { uint8_t* p = &dbg.rgb[((size_t)py * dbg.w + px) * 3]; p[0] = r; p[1] = g; p[2] = b; }
+                if (qx >= 0 && qy >= 0 && qx < dbg.w && qy < dbg.h) { uint8_t* p = &dbg.rgb[((size_t)qy * dbg.w + qx) * 3]; p[0] = r; p[1] = g; p[2] = b; }
+            }
+        };
+        for (const auto& b : Markers::findDots(inked, rf, ms)) plot(b.x, b.y, 255, 0, 0);
+        for (int i = 0; i < Markers::COUNT; ++i) { float px, py; Markers::spotPosition(rf, i, im.w, im.h, px, py); plot(px + 6, py, 0, 200, 0); }
+        Img::savePng(Util::join(Util::tempDir(), "pantomimus_markers.png"), dbg);
+    }
+    check(cal >= Markers::COUNT - 3, "calibration finds the dots", "%d of %d%s", cal, Markers::COUNT, missing.c_str());
+    // the same dots moved (the mouth's corners up and out 4 px, as in a smile): tracked, and they pull their landmarks
+    Image moved = im;
+    int cornerR = -1, cornerL = -1;   // LAYOUT's mouth corners
+    for (int i = 0; i < Markers::COUNT; ++i) { if (std::string(Markers::LAYOUT[i].name) == "mouth corner (right)") cornerR = i; if (std::string(Markers::LAYOUT[i].name) == "mouth corner (left)") cornerL = i; }
+    for (int i = 0; i < Markers::COUNT; ++i) {
+        float px, py; Markers::spotPosition(r2, i, im.w, im.h, px, py);
+        float dx = 2, dy = -1;
+        if (i == cornerR) { dx -= 4; dy -= 4; }
+        if (i == cornerL) { dx += 4; dy -= 4; }
+        inkDot(moved, px + dx, py + dy, rad);
+    }
+    Face::Result rm;
+    Markers::Result mr;
+    Face::Tracker tr3; tr3.load(dir, 0, err);
+    tr3.process(moved, nullptr, fs_, rm, err, [&](Face::Result& f) { mk.track(moved, f, ms, mr); });
+    check(mr.found >= cal - 2, "the dots are tracked", "%d of %d", mr.found, cal);
+    bool cornersSeen = mr.seen[cornerR] && mr.seen[cornerL];
+    float errR = 1e9f, errL = 1e9f;
+    if (cornersSeen) {
+        float rx, ry, lx, ly;
+        Markers::spotPosition(r2, cornerR, im.w, im.h, rx, ry);
+        Markers::spotPosition(r2, cornerL, im.w, im.h, lx, ly);
+        errR = std::hypot(mr.x[cornerR] * W - (rx - 2), mr.y[cornerR] * H - (ry - 5));
+        errL = std::hypot(mr.x[cornerL] * W - (lx + 6), mr.y[cornerL] * H - (ly - 5));
+    }
+    check(cornersSeen && errR < 1.5f && errL < 1.5f, "the moved mouth corners are where they were inked", "off by %.2f and %.2f px", errR, errL);
+}
+
 int run(const std::string& testsDir) {
     App::out("Pantomimus " PANTOMIMUS_VERSION " self-test");
     maths();
@@ -302,6 +414,7 @@ int run(const std::string& testsDir) {
     filters();
     takesAndExports();
     tracking(testsDir);
+    face(testsDir);
     App::out(fails ? "FAILED: " + std::to_string(fails) + " of " + std::to_string(fails + passes) : "All " + std::to_string(passes) + " passed");
     return fails;
 }

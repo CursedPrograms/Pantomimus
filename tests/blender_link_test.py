@@ -52,7 +52,10 @@ def check(what, ok, detail=""):
     fails += 0 if ok else 1
 
 
-pl.register()
+try:
+    pl.register()
+except ValueError:   # built in (Prometheus): already registered
+    pass
 threading.Thread(target=serve, daemon=True).start()
 time.sleep(0.2)
 check("connects", pl._Stream.connect("127.0.0.1", PORT), pl._Stream.status)
@@ -79,7 +82,28 @@ check("the child points along the turn", (lower.tail - tail_want).length < 1e-4,
 
 pl.key_pose(arm, 1)
 check("records keys", arm.animation_data is not None and arm.animation_data.action is not None)
+
+# the face: ARKit's blendshapes onto shape keys of the same names, under the armature (capitals don't matter)
+names = ["_neutral", "jawOpen", "eyeBlinkLeft"]
+weights = [0.0, 0.7, 0.25]
+me = bpy.data.meshes.new("Head")
+me.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+head = bpy.data.objects.new("Head", me)
+bpy.context.collection.objects.link(head)
+head.parent = arm
+head.shape_key_add(name="Basis")
+head.shape_key_add(name="jawOpen")
+head.shape_key_add(name="EyeBlinkLeft")
+st = bpy.context.scene.pantomimus
+st.target = arm
+meshes = pl.face_meshes(st)
+check("finds the face mesh under the armature", meshes == [head], str([m.name for m in meshes]))
+n = pl.apply_face(meshes, names, weights, 1.0)
+kb = head.data.shape_keys.key_blocks
+check("drives the shape keys by name", n == 2 and abs(kb["jawOpen"].value - 0.7) < 1e-5 and abs(kb["EyeBlinkLeft"].value - 0.25) < 1e-5,
+      f"{n} keys, jawOpen {kb['jawOpen'].value:.2f}, EyeBlinkLeft {kb['EyeBlinkLeft'].value:.2f}")
+pl.key_face(meshes, names, 1)
+check("records the face", head.data.shape_keys.animation_data is not None and head.data.shape_keys.animation_data.action is not None)
 pl._Stream.close()
-pl.unregister()
 print("All passed" if not fails else f"{fails} failed")
 sys.exit(1 if fails else 0)

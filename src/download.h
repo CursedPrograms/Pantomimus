@@ -21,9 +21,10 @@ struct Model {
 // BlazePose's detector and landmark models (MediaPipe, Apache-2.0; ONNX by Unity's inference-engine-blaze-pose) and
 // MediaPipe's hand models
 const std::vector<Model>& models();
-// the ones a setup needs: the detector and the chosen landmark model (lite/full/heavy); hands: the hand models too
-std::vector<Model> needed(int poseModel, bool hands);
-std::vector<Model> missing(const std::string& dir, int poseModel, bool hands);
+// the ones a setup needs: the detector and the chosen landmark model (lite/full/heavy); hands: the hand models too;
+// face: the face detector, mesh and blendshapes
+std::vector<Model> needed(int poseModel, bool hands, bool face = false);
+std::vector<Model> missing(const std::string& dir, int poseModel, bool hands, bool face = false);
 
 // fetches what's missing into dir (and the models' licence beside them); progress 0..1 and what's coming in
 bool fetch(const std::string& dir, const std::vector<Model>& list, std::atomic<float>& progress, std::string& status, std::string& err,

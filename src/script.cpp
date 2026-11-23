@@ -65,7 +65,7 @@ std::string exportAll(const std::string& stem) {
 }
 }  // namespace
 
-const char* names() { return "window, about, prefs, lang, track, solve, record, takes, export, link, video, hands"; }
+const char* names() { return "window, about, prefs, lang, track, solve, record, takes, export, link, video, hands, face, markers"; }
 
 bool start(const std::string& name, const std::string& source) {
     steps.clear(); at = 0; frame = 0; stepFrame = 0; stepStart = Util::now(); src = source;
@@ -198,6 +198,39 @@ bool start(const std::string& name, const std::string& source) {
             const Live L = live();
             out(fmt("hands: left %s (%.2f), right %s (%.2f)", L.hands.hand[0].found ? "found" : "not found", L.hands.hand[0].score,
                     L.hands.hand[1].found ? "found" : "not found", L.hands.hand[1].score));
+        }));
+    } else if (name == "face" || name == "markers") {
+        // the face (a close-up works: no body needed); "markers": with Sharpie dots, calibrated, then tracked and recorded
+        const bool marks = name == "markers";
+        steps.push_back(once([marks] {
+            st.set.face.on = true; st.set.markers.on = marks; st.set.markerGuide = true; settingsChanged();
+            if (marks) clearMarkers();
+            if (!missingModels().empty()) downloadModels();
+        }));
+        steps.push_back([] { return downloadProgress() < 0 && missingModels().empty() || Util::now() - stepStart > 300; });
+        steps.push_back(once([] { openSource(); }));
+        steps.push_back([] { const Live L = live(); return (L.face.found && L.frameNo > 5) || Util::now() - stepStart > 60; });
+        if (marks) {
+            steps.push_back(once([] { calibrateMarkers(); }));
+            steps.push_back(wait(8));
+            recordSome(20);
+        } else steps.push_back(wait(8));
+        steps.push_back(once([marks] {
+            const Live L = live();
+            const Face::Result& f = L.face;
+            out(fmt("face: %s (%.2f), smile %.2f, jawOpen %.2f, blink %.2f, yaw %.0f pitch %.0f roll %.0f", f.found ? "found" : "not found", f.score,
+                    (f.weights[44] + f.weights[45]) / 2, f.weights[25], (f.weights[9] + f.weights[10]) / 2, f.yaw, f.pitch, f.roll));
+            if (marks) {
+                out(fmt("markers: %s, %d of %d dots tracked", L.markers.calibrated ? "calibrated" : "not calibrated", L.markers.found, Markers::COUNT));
+                if (st.sel >= 0) {
+                    const Clip::Take& t = st.takes[st.sel];
+                    std::string err;
+                    const std::string a = Util::join(Util::tempDir(), "pantomimus_test_face.csv"), b = Util::join(Util::tempDir(), "pantomimus_test_markers.csv");
+                    const bool okA = Clip::exportFaceCsv(t, 30, a, err), okB = Clip::exportMarkersCsv(t, b, err);
+                    out(fmt("take: %zu frames, %zu faces, %zu marker frames; face CSV %s (%lld bytes), markers CSV %s (%lld bytes)", t.frames(), t.faces.size(),
+                            t.markers.size(), okA ? "ok" : err.c_str(), Util::fileSize(a), okB ? "ok" : err.c_str(), Util::fileSize(b)));
+                }
+            }
         }));
     } else return false;
     return true;

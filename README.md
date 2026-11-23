@@ -31,6 +31,8 @@ Part of Atelier.
 * **Live webcam tracking:** Captures full-body poses in real time from any standard USB or built-in camera.
 * **Clean 3D skeletons:** Filters jitter and maps joint rotations onto standard humanoid armatures.
 * **Ready for your pipeline:** Export animations directly to `.fbx`, `.bvh`, or `.glb` for Blender, **Demiurge**, Unity, or Unreal Engine—or pair with **Pygmalion** rigs.
+* **Face capture:** 478-point face tracking with the irises, ARKit's 52 blendshapes and the head's turn, from a close-up or with the whole body in view. Exports Live Link Face CSV and drives shape keys of the same names in Blender live.
+* **Sharpie markers:** draw about 25 dots on your face where Pantomimus shows you, calibrate once with a neutral face, and the dots sharpen the brows, cheeks, lips and jaw. The marker tracks export as CSV too.
 * **Runs locally:** Fast native C++ / OpenGL interface with no cloud accounts or subscriptions.
 
 ---
