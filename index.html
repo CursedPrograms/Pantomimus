@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pantomimus - motion capture from your webcam</title>
+  <meta name="description" content="Pantomimus: free full-body motion capture from any webcam or video, cleaned into 3D skeletal animation and exported as BVH, FBX or glTF, or streamed live to Blender and Pygmalion. Part of Atelier.">
+  <link rel="stylesheet" href="site/style.css">
+</head>
+
+<body>
+  <header class="top">
+    <div>
+      <h1>Pantomimus</h1>
+      <p class="tag">Act it out: motion capture from any webcam, in real time. Part of
+        <a href="https://github.com/CursedPrograms/Atelier">Atelier</a>.</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="shot">
+      <img src="images/window.jpg" alt="Pantomimus: the controls on the left, the camera and the solved skeleton in 3D in the middle, the landmarks on the right">
+    </section>
+
+    <section class="actions">
+      <a class="btn" href="https://github.com/CursedPrograms/Pantomimus#readme">Build it</a>
+      <a class="btn quiet" href="https://github.com/CursedPrograms/Pantomimus">Get it on GitHub</a>
+    </section>
+
+    <section class="grid" id="features"></section>
+
+    <section class="keys">
+      <h2>Your first take</h2>
+      <p>Stand back from the webcam so it sees all of you, press <kbd>F5</kbd> to start the camera and <kbd>R</kbd> to
+        record. Trim the take on the timeline, smooth it, and export it from <kbd>File</kbd> as BVH, FBX or glTF. Or turn
+        on the live link and move a character in Blender, Prometheus or Pygmalion as you move.</p>
+    </section>
+    <section class="keys" id="requirements">
+      <h2>Minimum requirements</h2>
+      <table class="reqs">
+        <tr><th>System</th><td>Windows 10 or 11, 64-bit (Linux builds from source)</td></tr>
+        <tr><th>Processor</th><td>64-bit (AVX2 recommended for pose tracking)</td></tr>
+        <tr><th>Memory</th><td>4 GB RAM</td></tr>
+        <tr><th>Graphics</th><td>any card with OpenGL 3.0 or newer</td></tr>
+        <tr><th>Camera</th><td>any webcam (720p at 30 fps or better), or a video file</td></tr>
+        <tr><th>Disk</th><td>200 MB, plus the pose models (downloaded on first start)</td></tr>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <p>Pose tracking: MediaPipe BlazePose (Apache-2.0), run with ONNX Runtime (MIT).</p>
+    <p>Farica&#9734;Kimora &copy; <a href="https://cursed-entertainment.itch.io/">Cursed Entertainment</a> <span id="year">2026</span></p>
+  </footer>
+  <script src="site/site.js"></script>
+</body>
+
+</html>
