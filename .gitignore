@@ -66,3 +66,11 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Pantomimus
+external/
+dist/
+build-linux/
+.vs/
+*.user
+/models/*.onnx
