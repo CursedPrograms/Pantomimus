@@ -74,3 +74,4 @@ build-linux/
 .vs/
 *.user
 /models/*.onnx
+__pycache__/
