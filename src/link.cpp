@@ -235,7 +235,9 @@ void Pygmalion::start(const std::string& host, int port, float rate) {
             std::string st;
             if (!Export::poseBvh(s, p, file, o, err)) st = err;
             else if (!call(im->host, im->port, "{\"function\": \"getPose\", \"params\": {\"poseFilename\": \"" + json + "\"}}", reply, err)) st = err;
-            else st = reply.find("\"error\": \"\"") != std::string::npos || reply.find("\"error\":\"\"") != std::string::npos || reply.find("error") == std::string::npos
+            // "No skeleton": Pygmalion has posed the person (its own rig) but has no export skeleton chosen to report
+            else st = reply.find("\"error\": \"\"") != std::string::npos || reply.find("\"error\":\"\"") != std::string::npos ||
+                              reply.find("No skeleton") != std::string::npos || reply.find("error") == std::string::npos
                           ? "Connected: Pygmalion takes the pose" : "Pygmalion: " + reply.substr(0, 160);
             g.lock();
             im->status = st;
